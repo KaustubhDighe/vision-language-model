@@ -2,6 +2,8 @@ from PIL import Image, ImageDraw
 import random
 import numpy as np
 import torch
+from torchvision import transforms
+from transformers import BertTokenizer
 
 class ShapesDataset(torch.utils.data.Dataset):
     def __init__(self, image_size, num_objects, num_samples, show=False):
@@ -19,9 +21,10 @@ class ShapesDataset(torch.utils.data.Dataset):
         self.image_size = image_size
         self.num_objects = num_objects
         self.num_samples = num_samples
-        self.shape_size = 100
-        self.N = self.image_size[0] // self.shape_size
+        self.N = 4
+        self.shape_size = image_size[0] // self.N
         self.show = show
+        self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
     
     def __len__(self):
         return self.num_samples
@@ -42,10 +45,10 @@ class ShapesDataset(torch.utils.data.Dataset):
             draw.polygon([A, B, C], fill=self.rgb[color])
         elif shape == 'hexagon':
             A = (np.random.randint(x0, x1), y0)
-            B = (x1, np.random.randint(y0, y1))
+            B = (x1, np.random.randint(y0, y1 - 1))
             C = (x1, np.random.randint(B[1], y1))
             D = (np.random.randint(x0, x1), y1)
-            E = (x0, np.random.randint(y0, y1))
+            E = (x0, np.random.randint(y0 + 1, y1))
             F = (x0, np.random.randint(y0, E[1]))
             draw.polygon([A, B, C, D, E, F] , fill=self.rgb[color])
     
@@ -66,12 +69,20 @@ class ShapesDataset(torch.utils.data.Dataset):
         def get_loc_from_bbox(bbox):
             return (np.array(list(bbox)) + 0.5) * self.shape_size
         
+        transform = transforms.Compose([
+                        transforms.ToTensor(),
+                        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]) 
+                    ])
+        
         text = f"pick the {colors[0]} block and place it over the {colors[1]} block"
+        tokenized_text = self.tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=512)
+        tokenized_text = {'input_ids': tokenized_text['input_ids'][0], 'attention_mask': tokenized_text['attention_mask'][0]}
         start, end = get_loc_from_bbox(bboxes[0]), get_loc_from_bbox(bboxes[1])
-        return ({'image' : np.array(img), 'text': text}, {'start': start, 'end': end})
+        
+        return ({'image' : transform(img), 'text': tokenized_text}, np.concatenate((start, end)))
 
 if __name__ == '__main__':
     # Generate an image and show it
-    dataset = ShapesDataset((500, 500), 3, 1024, show=True)
+    dataset = ShapesDataset((224, 224), 3, 1024, show=True)
     dataloader = torch.utils.data.DataLoader(dataset, batch_size=4, shuffle=True)
     print(next(iter(dataloader)))
