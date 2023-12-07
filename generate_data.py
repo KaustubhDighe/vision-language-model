@@ -74,4 +74,4 @@ if __name__ == '__main__':
     # Generate an image and show it
     dataset = ShapesDataset((500, 500), 3, 1024, show=True)
     dataloader = torch.utils.data.DataLoader(dataset, batch_size=4, shuffle=True)
-    print(next(iter(dataloader)).shape)
+    print(next(iter(dataloader)))
