@@ -17,7 +17,7 @@ class ShapesDataset(torch.utils.data.Dataset):
             'orange' : (255, 165, 0),
             'pink' : (255, 192, 203) 
         }
-        self.shapes = ['square', 'circle', 'triangle', 'hexagon']
+        self.shapes = ['square', 'square'] # , 'triangle', 'hexagon']
         self.image_size = image_size
         self.num_objects = num_objects
         self.num_samples = num_samples
@@ -33,10 +33,12 @@ class ShapesDataset(torch.utils.data.Dataset):
         i, j = bbox
         x0, y0, x1, y1 = i * self.shape_size, j * self.shape_size, (i + 1) * self.shape_size, (j + 1) * self.shape_size
         if shape == 'square':
-            d = np.random.randint(0, self.shape_size // 2)
+            # d = np.random.randint(0, self.shape_size // 2)
+            d = 0
             draw.polygon([(x0 + d, y0), (x1, y0 + d), (x1-d, y1), (x0, y1-d)], fill=self.rgb[color])
         elif shape == 'circle':
-            d = np.random.randint(0, self.shape_size // 4)
+            # d = np.random.randint(0, self.shape_size // 4)
+            d = 0
             draw.ellipse([x0 + d, y0 + d, x1 - d, y1 - d], fill=self.rgb[color])
         elif shape == 'triangle':
             A = (np.random.randint(x0, x1), y0)
@@ -67,19 +69,26 @@ class ShapesDataset(torch.utils.data.Dataset):
             img.show()
 
         def get_loc_from_bbox(bbox):
-            return (np.array(list(bbox)) + 0.5) * self.shape_size
+            return ((np.array(list(bbox)) + 0.5) * self.shape_size - self.image_size[0] / 2) / self.image_size[0]
         
         transform = transforms.Compose([
                         transforms.ToTensor(),
                         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]) 
                     ])
         
-        text = f"pick the {colors[0]} block and place it over the {colors[1]} block"
+        text = f"from {colors[0]} square to the {colors[1]} square"
         tokenized_text = self.tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=512)
         tokenized_text = {'input_ids': tokenized_text['input_ids'][0], 'attention_mask': tokenized_text['attention_mask'][0]}
-        start, end = get_loc_from_bbox(bboxes[0]), get_loc_from_bbox(bboxes[1])
+        # start, end = get_loc_from_bbox(bboxes[0]), get_loc_from_bbox(bboxes[1])
+        # start, end = bbox[0], bbox[1]
+        trajectory = np.zeros((4, self.N))
+        trajectory[0, bboxes[0][0]] = 1
+        trajectory[1, bboxes[0][1]] = 1
+        trajectory[2, bboxes[1][0]] = 1
+        trajectory[3, bboxes[1][1]] = 1
         
-        return ({'image' : transform(img), 'text': tokenized_text}, np.concatenate((start, end)))
+        return ({'image' : transform(img), 'text': tokenized_text, 'prompt': text, 'start': bboxes[0], 'end': bboxes[1]}, 
+                torch.tensor(trajectory, dtype=torch.float32))
 
 if __name__ == '__main__':
     # Generate an image and show it
