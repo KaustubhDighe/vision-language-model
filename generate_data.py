@@ -4,6 +4,7 @@ import numpy as np
 import torch
 from torchvision import transforms
 from transformers import BertTokenizer
+from clip import load_clip
 
 class ShapesDataset(torch.utils.data.Dataset):
     def __init__(self, image_size, num_objects, num_samples, show=False):
@@ -24,7 +25,7 @@ class ShapesDataset(torch.utils.data.Dataset):
         self.N = 4
         self.shape_size = image_size[0] // self.N
         self.show = show
-        self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+        # self.clip_rn50, _ = load_clip('RN50', device='cpu', jit=False)
     
     def __len__(self):
         return self.num_samples
@@ -69,26 +70,26 @@ class ShapesDataset(torch.utils.data.Dataset):
             img.show()
 
         def get_loc_from_bbox(bbox):
-            return ((np.array(list(bbox)) + 0.5) * self.shape_size - self.image_size[0] / 2) / self.image_size[0]
+            return torch.tensor((np.array(list(bbox)) + 0.5) * self.shape_size) # - self.image_size[0] / 2) # / self.image_size[0]
         
         transform = transforms.Compose([
                         transforms.ToTensor(),
                         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]) 
                     ])
         
-        text = f"from {colors[0]} square to the {colors[1]} square"
-        tokenized_text = self.tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=512)
-        tokenized_text = {'input_ids': tokenized_text['input_ids'][0], 'attention_mask': tokenized_text['attention_mask'][0]}
-        # start, end = get_loc_from_bbox(bboxes[0]), get_loc_from_bbox(bboxes[1])
+        text = f"pick the {colors[0]} square and place it on the {colors[1]} square"
+        # tokenized_text = self.tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=512)
+        # tokenized_text = {'input_ids': tokenized_text['input_ids'][0], 'attention_mask': tokenized_text['attention_mask'][0]}
+        start, end = get_loc_from_bbox(bboxes[0]), get_loc_from_bbox(bboxes[1])
         # start, end = bbox[0], bbox[1]
-        trajectory = np.zeros((4, self.N))
-        trajectory[0, bboxes[0][0]] = 1
-        trajectory[1, bboxes[0][1]] = 1
-        trajectory[2, bboxes[1][0]] = 1
-        trajectory[3, bboxes[1][1]] = 1
+        # trajectory = np.zeros((4, self.N))
+        # trajectory[0, bboxes[0][0]] = 1
+        # trajectory[1, bboxes[0][1]] = 1
+        # trajectory[2, bboxes[1][0]] = 1
+        # trajectory[3, bboxes[1][1]] = 1
         
-        return ({'image' : transform(img), 'text': tokenized_text, 'prompt': text, 'start': bboxes[0], 'end': bboxes[1]}, 
-                torch.tensor(trajectory, dtype=torch.float32))
+        return ({'image' : transform(img), 'text': text},  torch.concatenate((start, end)) / self.image_size[0] - 0.5) # torch.tensor(trajectory, dtype=torch.float32))
+                # torch.tensor(trajectory, dtype=torch.float32))
 
 if __name__ == '__main__':
     # Generate an image and show it

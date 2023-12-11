@@ -1,46 +1,129 @@
-# import torch
-# from transformers import CLIPModel, AutoProcessor
-# from PIL import Image
-# import requests
-
-# model = CLIPModel.from_pretrained('openai/clip-vit-base-patch32')
-# processor = AutoProcessor.from_pretrained('openai/clip-vit-base-patch32')
-# model.eval()
-
-# url = "http://images.cocodataset.org/val2017/000000039769.jpg"
-# image = Image.open(requests.get(url, stream=True).raw)
-
-# inputs = processor(text=["a photo of a cat", "a photo of a dog"], images=image, return_tensors="pt", padding=True)
-# outputs = model(**inputs)
-# print(outputs.image_embeds.shape)
-# logits_per_image = outputs.logits_per_image  # this is the image-text similarity score
-# probs = logits_per_image.softmax(dim=1)
-# print("Label probs:", probs)
-# print("Label probs:", probs.tolist())
-
 import torch
-import clip
-from PIL import Image
-import requests
-from torchsummary import summary
+import torch.nn as nn
+import torch.nn.functional as F
+from clip import build_model, load_clip, tokenize
 
-# device = "mps"
-model, preprocess = clip.load("ViT-B/32")
 
-url = "http://images.cocodataset.org/val2017/000000039769.jpg"
-image = preprocess(Image.open(requests.get(url, stream=True).raw)).unsqueeze(0)
+class StreamFCN(nn.Module):
+    def __init__(self, output_channels):
+        super(StreamFCN, self).__init__()
+        self.up_factor = 2
+        self.input_dim = 2048
+        self.device = "mps" if torch.backends.mps.is_available() else "cpu"
+        self.output_channels = output_channels
+        self.clip_rn50, _ = load_clip("RN50", device="cpu", jit=False)
 
-text = clip.tokenize(["a diagram", "a dog", "a cat"])
+        self.conv1 = nn.Conv2d(2048, 1024, kernel_size=3, stride=1, padding=1, bias=False)
+        self.lang_down1 = nn.Linear(1024, 1024)
+        self.lang_down2 = nn.Linear(1024, 512)
+        self.lang_down3 = nn.Linear(512, 256)
 
-summary(model.encode_image, (3, 224, 224))
-    # text_features = model.encode_text(text)
+        self.layer1 = nn.Sequential(
+            nn.Conv2d(1024, 512, kernel_size=3, stride=1, padding=1, bias=False),
+            nn.ReLU(),
+            nn.UpsamplingBilinear2d(scale_factor=2),
+        )
+
+        self.layer2 = nn.Sequential(
+            nn.Conv2d(512, 256, kernel_size=3, stride=1, padding=1, bias=False),
+            nn.ReLU(),
+            nn.UpsamplingBilinear2d(scale_factor=2),
+        )
+
+        self.layer3 = nn.Sequential(
+            nn.Conv2d(256, 128, kernel_size=3, stride=1, padding=1, bias=False),
+            nn.ReLU(),
+            nn.UpsamplingBilinear2d(scale_factor=2),
+        )
+
+        self.layer4 = nn.Sequential(
+            nn.Conv2d(128, 64, kernel_size=3, stride=1, padding=1, bias=False),
+            nn.ReLU(),
+            nn.UpsamplingBilinear2d(scale_factor=2),
+        )
+
+        self.layer5 = nn.Sequential(
+            nn.Conv2d(64, self.output_channels, kernel_size=3, stride=1, padding=1, bias=False),
+            nn.ReLU(),
+            nn.UpsamplingBilinear2d(scale_factor=2),
+        )
+        self.fc = nn.Linear(224 * 224 * self.output_channels, 4)
     
-    # logits_per_image, logits_per_text = model(image, text)
-    # probs = logits_per_image.softmax(dim=-1).cpu().numpy()
+    def forward(self, x, l):
+        x, im = self.encode_image(x)
+        l_enc, l_emb, l_mask = self.encode_text(l)
+        l_input = l_enc
 
-# with torch.no_grad():
-#     image_features = model.encode_image(image)
-#     text_features = model.encode_text(text)
+        assert x.shape[1] == self.input_dim
+        x = self.conv1(x)
+        l_enc = self.lang_down1(l_enc)
+        # print(l_enc.shape)
+        # print(x.shape)
+        x = self.layer1(x * l_enc.reshape(-1, 1024, 1, 1))
+        l_enc = self.lang_down2(l_enc)
+        # print(x.shape)
+        x = self.layer2(x * l_enc.reshape(-1, 512, 1, 1))
+        l_enc = self.lang_down3(l_enc)
+        x = self.layer3(x * l_enc.reshape(-1, 256, 1, 1))
+        x = self.layer4(x)
+        x = self.layer5(x)
+        x = x.flatten(1)
+        x = self.fc(x)
+        return x
+
+    def encode_image(self, img):
+        with torch.no_grad():
+            img_encoding, img_im = self.clip_rn50.visual.prepool_im(img)
+        return img_encoding, img_im
+
+    def encode_text(self, x):
+        with torch.no_grad():
+            tokens = tokenize(x)
+            text_feat, text_emb = self.clip_rn50.encode_text_with_embeddings(tokens)
+
+        text_mask = torch.where(tokens==0, tokens, 1)  # [1, max_token_len]
+        return text_feat, text_emb, text_mask
+
+class PickAndPlace(nn.Module):
+    def __init__(self, crop_size=64, num_dense=10):
+        super(PickAndPlace, self).__init__()
+        self.crop_size = crop_size
+        self.num_dense = num_dense
+        self.pick = StreamFCN(output_channels=1)
+        self.place_key = StreamFCN(output_channels=num_dense)
+        self.place_query = StreamFCN(output_channels=1)
+        self.num_rotations = 36
     
-#     logits_per_image, logits_per_text = model(image, text)
-#     probs = logits_per_image.softmax(dim=-1).cpu().numpy()
+    def correlate(self, in0, in1):
+        output = F.conv2d(in1, in0)
+        output = F.interpolate(output, size=(in1.shape[-2], in1.shape[-1]), mode='bilinear')
+        return output
+    
+    def forward(self, x, l):
+        q_pick = self.pick(x, l[0])
+        _, _, H, W = q_pick.shape
+        q_pick = F.softmax(q_pick.reshape(H * W), dim=0)
+        t_pick = torch.argmax(q_pick)
+        t_pick = torch.tensor([[t_pick // H, t_pick % H]])
+
+        q_place = self.place_query(x, l[0])
+        q_place = F.softmax(q_place.reshape(H * W), dim=0)
+        t_place = torch.argmax(q_place)
+        t_place = torch.tensor([[t_place // H, t_place % H]])
+
+        # y = x[:, :, t_pick[0] - self.crop_size:t_pick[0] + self.crop_size, t_pick[1] - self.crop_size:t_pick[1] + self.crop_size]
+        # query = self.place_query(y, l)
+        # key = self.place_key(x, l)
+        # q_place = self.correlate(query, key)
+        # t_place = torch.argmax(q_place.reshape(H * W))
+        # t_place = torch.tensor([t_place // H, t_place % H])
+        return t_pick, t_place
+    
+if __name__ == '__main__':
+    model = StreamFCN(1)
+    model.to('cpu')
+    model.eval()
+    x = torch.randn((1, 3, 224, 224))
+    l = 'pick the red circle and keep it over the blue square'
+    x = model(x, l)
+    print(x.shape)
