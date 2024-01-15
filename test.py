@@ -56,5 +56,4 @@ def test(image_size=(224, 224), num_objects=2, num_samples=128, batch_size=16, d
 
 
 if __name__ == '__main__':
-    device = 'cpu'
-    test(device=device)
+    test()
