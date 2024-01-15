@@ -18,7 +18,7 @@ class ShapesDataset(torch.utils.data.Dataset):
             'orange' : (255, 165, 0),
             'pink' : (255, 192, 203) 
         }
-        self.shapes = ['square', 'square'] # , 'triangle', 'hexagon']
+        self.shapes = ['square', 'circle', 'triangle', 'hexagon']
         self.image_size = image_size
         self.num_objects = num_objects
         self.num_samples = num_samples
@@ -34,11 +34,11 @@ class ShapesDataset(torch.utils.data.Dataset):
         i, j = bbox
         x0, y0, x1, y1 = i * self.shape_size, j * self.shape_size, (i + 1) * self.shape_size, (j + 1) * self.shape_size
         if shape == 'square':
-            # d = np.random.randint(0, self.shape_size // 2)
+            d = np.random.randint(0, self.shape_size // 2)
             d = 0
             draw.polygon([(x0 + d, y0), (x1, y0 + d), (x1-d, y1), (x0, y1-d)], fill=self.rgb[color])
         elif shape == 'circle':
-            # d = np.random.randint(0, self.shape_size // 4)
+            d = np.random.randint(0, self.shape_size // 4)
             d = 0
             draw.ellipse([x0 + d, y0 + d, x1 - d, y1 - d], fill=self.rgb[color])
         elif shape == 'triangle':
@@ -77,7 +77,7 @@ class ShapesDataset(torch.utils.data.Dataset):
                         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]) 
                     ])
         
-        text = f"pick the {colors[0]} square and place it on the {colors[1]} square"
+        text = f"pick the {colors[0]} {shapes[0]} and place it on the {colors[1]} {shapes[1]}"
         # tokenized_text = self.tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=512)
         # tokenized_text = {'input_ids': tokenized_text['input_ids'][0], 'attention_mask': tokenized_text['attention_mask'][0]}
         start, end = get_loc_from_bbox(bboxes[0]), get_loc_from_bbox(bboxes[1])
